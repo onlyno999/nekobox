@@ -13,6 +13,7 @@
 #include <QVBoxLayout>
 
 #include <nekobox/dataStore/Configs.hpp>
+#include <nekobox/dataStore/Database.hpp>
 #include <nekobox/dataStore/ProxyEntity.hpp>
 #include <nekobox/global/CountryHelper.hpp>
 
