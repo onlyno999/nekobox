@@ -45,23 +45,6 @@ protected:
   }
 };
 
-QString countryNameCN(const QString &cc) {
-  static const QMap<QString, QString> names = {
-      {"US", "美国"}, {"HK", "香港"}, {"TW", "台湾"}, {"JP", "日本"},
-      {"SG", "新加坡"}, {"KR", "韩国"}, {"DE", "德国"}, {"GB", "英国"},
-      {"FR", "法国"}, {"NL", "荷兰"}, {"CA", "加拿大"}, {"AU", "澳大利亚"},
-      {"RU", "俄罗斯"}, {"IN", "印度"}, {"VN", "越南"}, {"TH", "泰国"},
-      {"MY", "马来西亚"}, {"PH", "菲律宾"}, {"ID", "印尼"}, {"TR", "土耳其"},
-      {"IT", "意大利"}, {"ES", "西班牙"}, {"CH", "瑞士"}, {"SE", "瑞典"},
-      {"PL", "波兰"}, {"UA", "乌克兰"}, {"CN", "中国"}, {"MO", "澳门"},
-      {"NZ", "新西兰"}, {"BR", "巴西"}, {"MX", "墨西哥"}, {"AR", "阿根廷"},
-      {"CL", "智利"}, {"ZA", "南非"}, {"EG", "埃及"}, {"AE", "阿联酋"},
-      {"IL", "以色列"}, {"SA", "沙特"}, {"KZ", "哈萨克斯坦"}, {"NG", "尼日利亚"},
-  };
-  auto it = names.find(cc);
-  return it == names.end() ? cc : it.value();
-}
-
 QString fmtBytes(qint64 b) {
   if (b < 1024)
     return QString::number(b) + " B";
@@ -80,6 +63,30 @@ const char *kCardSelectedStyle =
     "background:#fffafc;border:2px solid #f8bbd0;border-radius:10px;";
 
 } // namespace
+
+QString nbppCountryNameCN(const QString &cc) {
+  static const QMap<QString, QString> names = {
+      {"US", "美国"}, {"HK", "香港"}, {"TW", "台湾"}, {"JP", "日本"},
+      {"SG", "新加坡"}, {"KR", "韩国"}, {"DE", "德国"}, {"GB", "英国"},
+      {"FR", "法国"}, {"NL", "荷兰"}, {"CA", "加拿大"}, {"AU", "澳大利亚"},
+      {"RU", "俄罗斯"}, {"IN", "印度"}, {"VN", "越南"}, {"TH", "泰国"},
+      {"MY", "马来西亚"}, {"PH", "菲律宾"}, {"ID", "印尼"}, {"TR", "土耳其"},
+      {"IT", "意大利"}, {"ES", "西班牙"}, {"CH", "瑞士"}, {"SE", "瑞典"},
+      {"PL", "波兰"}, {"UA", "乌克兰"}, {"CN", "中国"}, {"MO", "澳门"},
+      {"NZ", "新西兰"}, {"BR", "巴西"}, {"MX", "墨西哥"}, {"AR", "阿根廷"},
+      {"CL", "智利"}, {"ZA", "南非"}, {"EG", "埃及"}, {"AE", "阿联酋"},
+      {"IL", "以色列"}, {"SA", "沙特"}, {"KZ", "哈萨克斯坦"}, {"NG", "尼日利亚"},
+  };
+  auto it = names.find(cc);
+  return it == names.end() ? cc : it.value();
+}
+
+void NbppNodeList::setFilter(const QString &text) {
+  if (filterText == text)
+    return;
+  filterText = text;
+  rebuild();
+}
 
 NbppNodeList::NbppNodeList(QWidget *parent) : QWidget(parent) {
   auto *root = new QVBoxLayout(this);
@@ -135,7 +142,23 @@ void NbppNodeList::rebuild() {
     auto ent = Configs::profileManager->GetProfile(pid);
     if (!ent)
       continue;
+    if (!filterText.isEmpty() &&
+        !ent->name.contains(filterText, Qt::CaseInsensitive))
+      continue;
     sections[ent->test_country.toUpper()] << ent;
+  }
+
+  if (sections.isEmpty()) {
+    auto *hint = new QLabel(
+        filterText.isEmpty()
+            ? tr("这个分组还没有节点，导入订阅后会显示在这里")
+            : tr("没有匹配的节点"),
+        content);
+    hint->setStyleSheet("color:#999;padding:12px;");
+    lay->addWidget(hint);
+    lay->addStretch(1);
+    area->verticalScrollBar()->setValue(0);
+    return;
   }
 
   // Section order: armed section first, then by code, unknown last.
@@ -151,18 +174,10 @@ void NbppNodeList::rebuild() {
   for (const QString &cc : order) {
     const auto &ents = sections[cc];
     const bool isArmedSection = armed && armedCC == cc;
-    bool hasStarted = false;
-    for (auto &e : ents)
-      if (e->Id() == startedId)
-        hasStarted = true;
 
-    bool expanded;
-    if (userCollapsed.contains(cc))
-      expanded = false;
-    else if (userExpanded.contains(cc) || hasStarted || isArmedSection)
-      expanded = true;
-    else
-      expanded = false;
+    // Sections are expanded by default (the mockup shows the nodes);
+    // only an explicit user collapse folds one.
+    bool expanded = !userCollapsed.contains(cc);
 
     // --- section header ---
     auto *header = new QWidget(content);
@@ -175,7 +190,7 @@ void NbppNodeList::rebuild() {
       title = QString("？ 未检测 · %1").arg(ents.size());
     else
       title = QString("%1 %2 · %3")
-                  .arg(CountryCodeToFlag(cc), countryNameCN(cc))
+                  .arg(CountryCodeToFlag(cc), nbppCountryNameCN(cc))
                   .arg(ents.size());
     auto *titleBtn = new QPushButton(title, header);
     titleBtn->setFlat(true);

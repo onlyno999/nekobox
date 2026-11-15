@@ -14,6 +14,7 @@
 #include <3rdparty/qv2ray/v2/proxy/QvProxyConfigurator.hpp>
 #include <nekobox/global/GuiUtils.hpp>
 #include <QInputDialog>
+#include <QTime>
 #include <QPushButton>
 #include <QDesktopServices>
 #include <QMessageBox>
@@ -234,6 +235,7 @@ void MainWindow::runIPTest(const QString& config, bool useDefault, const QString
         }
     }
     if (changed) {
+        nbppLastScan = QTime::currentTime().toString("HH:mm");
         runOnUiThread([this] { refresh_proxy_list(); });
     }
 }

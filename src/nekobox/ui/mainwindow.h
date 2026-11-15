@@ -136,6 +136,8 @@ namespace Ui {
 QT_END_NAMESPACE
 
 class NbppNodeList;
+class QLabel;
+class QStackedWidget;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -376,6 +378,38 @@ private:
     void nbpp_auto_tick();
     void nbpp_arm_toggle(int gid, const QString &cc);
     NbppNodeList *nbppList = nullptr;
+    // NekoBox++ mockup shell (custom title bar / status row / sidebar /
+    // bottom bar wrapped around the original widgets)
+    QWidget *nbppTitleBar = nullptr;
+    QLabel *nbppTrafficPill = nullptr;
+    QLabel *nbppStatusDot = nullptr;
+    QLabel *nbppStatusText = nullptr;
+    QLabel *nbppStatusNode = nullptr;
+    QPushButton *nbppTunBtn = nullptr;
+    QPushButton *nbppSysBtn = nullptr;
+    QPushButton *nbppStartBtn = nullptr;
+    QPushButton *nbppMaxBtn = nullptr;
+    QPushButton *nbppNavNodes = nullptr;
+    QPushButton *nbppNavLogs = nullptr;
+    QPushButton *nbppSwPlay = nullptr;
+    QPushButton *nbppSwCnDom = nullptr;
+    QPushButton *nbppSwCnIp = nullptr;
+    QListWidget *nbppGroupList = nullptr;
+    QLabel *nbppBottomScan = nullptr;
+    QStackedWidget *nbppStack = nullptr;
+    QTimer *nbppUiTimer = nullptr;
+    QPoint nbppDragPos;
+    QString nbppLastScan;
+    QString nbppLastAddrs;
+    QString nbppGroupSig;
+    QString nbppListSig;
+    QList<int> nbppSweepQueue;
+    qint64 nbppLastUp = -1;
+    qint64 nbppLastDown = -1;
+    void nbpp_build_shell();
+    void nbpp_refresh_shell();
+    bool nbpp_rule_present(int kind);
+    void nbpp_rule_toggle(int kind);
     QMutex logLock;
     bool force_hide_text_under_buttons = false;
     bool force_hide_tray = false;

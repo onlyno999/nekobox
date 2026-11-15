@@ -21,6 +21,7 @@ public:
 
   void rebuild();
   void rebuildThrottled();
+  void setFilter(const QString &text);
 
   std::function<void(int)> onStartProfile;
   std::function<void()> onStopProfile;
@@ -37,4 +38,9 @@ private:
   QSet<QString> userExpanded;
   int selectedId = -1;
   qint64 lastBuildMs = 0;
+  QString filterText;
 };
+
+// Chinese display name for a two-letter region code (falls back to
+// the code itself). Shared with the main window's status row.
+QString nbppCountryNameCN(const QString &cc);

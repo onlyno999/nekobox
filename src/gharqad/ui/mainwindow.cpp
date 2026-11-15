@@ -31,6 +31,13 @@
 #include <nekobox/ui/mainwindow.h>
 #include <QGridLayout>
 #include "NbppNodeList.hpp"
+#include <nekobox/global/CountryHelper.hpp>
+#include <QDateTime>
+#include <QCursor>
+#include <QFrame>
+#include <QLabel>
+#include <QNetworkInterface>
+#include <QStackedWidget>
 #include <nekobox/ui/MainWindowState.hpp>
 #include <nekobox/ui/utils/MapListModel.hpp>
 #include <nekobox/ui/setting/shutdownoverlay.hpp>
@@ -1057,6 +1064,9 @@ MainWindow::MainWindow(QWidget *parent)
     nbpp_arm_toggle(gid, cc);
   };
   nbppList->rebuild();
+
+  // NekoBox++ mockup shell: custom chrome around the original widgets.
+  nbpp_build_shell();
 
   // Listen port if random
   if (Configs::dataStore->random_inbound_port) {
@@ -4886,6 +4896,34 @@ return_deffer:
 // eventFilter
 
 bool MainWindow::eventFilter(QObject *obj, QEvent *event) {
+  // NekoBox++ shell: frameless window drag / double-click maximize on
+  // the custom title bar.
+  if (nbppTitleBar != nullptr && obj == nbppTitleBar) {
+    if (event->type() == QEvent::MouseButtonPress) {
+      auto *me = dynamic_cast<QMouseEvent *>(event);
+      if (me->button() == Qt::LeftButton) {
+        nbppDragPos =
+            me->globalPosition().toPoint() - frameGeometry().topLeft();
+        return true;
+      }
+    } else if (event->type() == QEvent::MouseMove) {
+      auto *me = dynamic_cast<QMouseEvent *>(event);
+      if (me->buttons() & Qt::LeftButton) {
+        if (isMaximized()) {
+          showNormal();
+          return true;
+        }
+        move(me->globalPosition().toPoint() - nbppDragPos);
+        return true;
+      }
+    } else if (event->type() == QEvent::MouseButtonDblClick) {
+      if (isMaximized())
+        showNormal();
+      else
+        showMaximized();
+      return true;
+    }
+  }
   if (event->type() == QEvent::MouseButtonPress) {
     auto mouseEvent = dynamic_cast<QMouseEvent *>(event);
     if (obj == ui->label_running && mouseEvent->button() == Qt::LeftButton &&
@@ -5600,6 +5638,553 @@ skip1:
 }
 #endif
 
+// ---------- NekoBox++ mockup shell ----------
+// The window chrome from the approved mockup (custom title bar,
+// status row, sidebar, bottom bar) wrapped around the ORIGINAL
+// widgets: every control below drives the same checkboxes, buttons,
+// menus and tab widget the upstream UI used, so all existing logic
+// keeps working unchanged. Upstream chrome that the mockup does not
+// have (menu bar, icon toolbar, top checkboxes, splitter tabs) is
+// hidden, not deleted.
+
+static QString nbppFmtRate(qint64 bytesPerSec) {
+  if (bytesPerSec < 1024)
+    return QString::number(bytesPerSec) + " B";
+  if (bytesPerSec < 1024 * 1024)
+    return QString::number(bytesPerSec / 1024.0, 'f', 1) + " KB";
+  return QString::number(bytesPerSec / 1048576.0, 'f', 1) + " MB";
+}
+
+static QString nbppNetLabel() {
+  for (const auto &iface : QNetworkInterface::allInterfaces()) {
+    auto f = iface.flags();
+    if (!f.testFlag(QNetworkInterface::IsUp) ||
+        !f.testFlag(QNetworkInterface::IsRunning) ||
+        f.testFlag(QNetworkInterface::IsLoopBack))
+      continue;
+    bool hasV4 = false;
+    for (const auto &e : iface.addressEntries())
+      if (e.ip().protocol() == QAbstractSocket::IPv4Protocol)
+        hasV4 = true;
+    if (!hasV4)
+      continue;
+    QString n = iface.humanReadableName();
+    if (n.contains("Wi-Fi") || n.contains("Wireless") ||
+        n.contains("WLAN") || n.contains("无线"))
+      return "Wi-Fi";
+    if (n.contains("Ethernet") || n.contains("以太网"))
+      return "以太网";
+    return n;
+  }
+  return "—";
+}
+
+static const QString kNbppGeositeUrl =
+    "https://raw.githubusercontent.com/onlyno999/sing-rules-filtered/"
+    "main/rule-set/geosite-cn.srs";
+static const QString kNbppGeoipUrl =
+    "https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/"
+    "geoip-cn.srs";
+
+bool MainWindow::nbpp_rule_present(int kind) {
+  auto chain = Configs::profileManager->GetRouteChain(
+      Configs::dataStore->routing->current_route_id);
+  if (!chain)
+    return false;
+  for (auto &r : chain->Rules) {
+    if (!r)
+      continue;
+    if (kind == 0 && r->name == "Play Store")
+      return true;
+    if (kind == 1 && r->rule_set.contains(kNbppGeositeUrl))
+      return true;
+    if (kind == 2 && r->rule_set.contains(kNbppGeoipUrl))
+      return true;
+  }
+  return false;
+}
+
+void MainWindow::nbpp_rule_toggle(int kind) {
+  auto chain = Configs::profileManager->GetRouteChain(
+      Configs::dataStore->routing->current_route_id);
+  if (!chain)
+    return;
+  if (kind == 0) {
+    bool found = false;
+    for (int i = chain->Rules.size() - 1; i >= 0; --i)
+      if (chain->Rules[i] && chain->Rules[i]->name == "Play Store") {
+        chain->Rules.removeAt(i);
+        found = true;
+      }
+    if (!found) {
+      auto pr = std::make_shared<Configs::RouteRule>();
+      pr->name = "Play Store";
+      pr->domain_suffix = {"googleapis.com",
+                           "connectivitycheck.gstatic.com",
+                           "www.google.com",
+                           "play-fe.googleapis.com",
+                           "play-lh.googleusercontent.com",
+                           "playstoregatewayadapter-pa.googleapis.com",
+                           "services.googleapis.cn",
+                           "xn--ngstr-lra8j.com",
+                           "play.googleapis.com",
+                           "mtalk.google.com"};
+      pr->outboundID = Configs::proxyID;
+      chain->Rules.insert(chain->Rules.isEmpty() ? 0 : 1, pr);
+    }
+  } else {
+    bool dom = nbpp_rule_present(1);
+    bool ip = nbpp_rule_present(2);
+    if (kind == 1)
+      dom = !dom;
+    else
+      ip = !ip;
+    for (int i = chain->Rules.size() - 1; i >= 0; --i) {
+      auto r = chain->Rules[i];
+      if (r && (r->rule_set.contains(kNbppGeositeUrl) ||
+                r->rule_set.contains(kNbppGeoipUrl)))
+        chain->Rules.removeAt(i);
+    }
+    if (dom || ip) {
+      auto cr = std::make_shared<Configs::RouteRule>();
+      cr->name = "China Direct";
+      if (dom)
+        cr->rule_set << kNbppGeositeUrl;
+      if (ip)
+        cr->rule_set << kNbppGeoipUrl;
+      cr->outboundID = Configs::directID;
+      chain->Rules << cr;
+    }
+  }
+  chain->Save();
+  MW_show_log(tr("规则已更新，下次连接生效"));
+  nbpp_refresh_shell();
+}
+
+void MainWindow::nbpp_build_shell() {
+  setWindowFlag(Qt::FramelessWindowHint, true);
+
+  auto *root = qobject_cast<QVBoxLayout *>(ui->centralwidget->layout());
+  if (!root)
+    return;
+
+  // Detach the widgets that stay visible in the new shell.
+  ui->tabWidget->setParent(nullptr);
+  ui->stats_widget->setParent(nullptr);
+  ui->searchBox->setParent(nullptr);
+  ui->url_test_button->setParent(nullptr);
+  // Hide upstream chrome the mockup does not have (kept alive: the
+  // hidden controls still carry the state the logic reads).
+  ui->toolbox_group->hide();
+  ui->checkBox_VPN->hide();
+  ui->checkBox_SystemProxy->hide();
+  ui->system_dns->hide();
+  ui->data_view->hide();
+  ui->splitter->hide();
+  ui->label_speed->hide();
+  ui->label_running->hide();
+  ui->label_inbound->hide();
+  if (menuBar())
+    menuBar()->hide();
+  while (auto *it = root->takeAt(0))
+    delete it;
+  root->setContentsMargins(0, 0, 0, 0);
+  root->setSpacing(0);
+  auto *central = ui->centralwidget;
+
+  // ---- title bar ----
+  nbppTitleBar = new QWidget(central);
+  nbppTitleBar->setFixedHeight(46);
+  nbppTitleBar->setStyleSheet(
+      "background: qlineargradient(x1:0, y1:0, x2:1, y2:0, "
+      "stop:0 #ef5ba1, stop:1 #f48fb1);");
+  auto *tl = new QHBoxLayout(nbppTitleBar);
+  tl->setContentsMargins(12, 0, 8, 0);
+  tl->setSpacing(10);
+  auto *iconLbl = new QLabel(nbppTitleBar);
+  iconLbl->setPixmap(QApplication::windowIcon().pixmap(26, 26));
+  iconLbl->setAttribute(Qt::WA_TransparentForMouseEvents);
+  tl->addWidget(iconLbl);
+  auto *titleLbl = new QLabel("NekoBox++", nbppTitleBar);
+  titleLbl->setStyleSheet("color:white;font-size:15px;font-weight:bold;");
+  titleLbl->setAttribute(Qt::WA_TransparentForMouseEvents);
+  tl->addWidget(titleLbl);
+  nbppTrafficPill = new QLabel("↑ 0 KB/s   ↓ 0 KB/s", nbppTitleBar);
+  nbppTrafficPill->setStyleSheet(
+      "background:rgba(255,255,255,0.35);color:white;"
+      "border-radius:10px;padding:3px 12px;");
+  nbppTrafficPill->setAttribute(Qt::WA_TransparentForMouseEvents);
+  tl->addWidget(nbppTrafficPill);
+  tl->addStretch(1);
+  auto mkWinBtn = [&](const QString &t) {
+    auto *b = new QPushButton(t, nbppTitleBar);
+    b->setFlat(true);
+    b->setFixedSize(38, 30);
+    b->setStyleSheet(
+        "color:white;font-size:13px;background:transparent;border:none;");
+    return b;
+  };
+  auto *minBtn = mkWinBtn("—");
+  nbppMaxBtn = mkWinBtn("▢");
+  auto *closeBtn = mkWinBtn("✕");
+  tl->addWidget(minBtn);
+  tl->addWidget(nbppMaxBtn);
+  tl->addWidget(closeBtn);
+  connect(minBtn, &QPushButton::clicked, this,
+          [this] { showMinimized(); });
+  connect(nbppMaxBtn, &QPushButton::clicked, this, [this] {
+    if (isMaximized())
+      showNormal();
+    else
+      showMaximized();
+  });
+  connect(closeBtn, &QPushButton::clicked, this, [this] { close(); });
+  nbppTitleBar->installEventFilter(this);
+  root->addWidget(nbppTitleBar);
+
+  // ---- status row ----
+  auto *statusRow = new QWidget(central);
+  statusRow->setFixedHeight(44);
+  statusRow->setStyleSheet(
+      "background:#ffffff;border-bottom:1px solid #f6dbe6;");
+  auto *sl = new QHBoxLayout(statusRow);
+  sl->setContentsMargins(14, 0, 12, 0);
+  sl->setSpacing(8);
+  nbppStatusDot = new QLabel("●", statusRow);
+  nbppStatusDot->setStyleSheet("color:#bdbdbd;font-size:13px;");
+  sl->addWidget(nbppStatusDot);
+  nbppStatusText = new QLabel(tr("未连接"), statusRow);
+  nbppStatusText->setStyleSheet("font-weight:bold;font-size:13px;");
+  sl->addWidget(nbppStatusText);
+  nbppStatusNode = new QLabel("", statusRow);
+  nbppStatusNode->setStyleSheet("color:#666;font-size:13px;");
+  sl->addWidget(nbppStatusNode);
+  sl->addStretch(1);
+  auto *seg = new QFrame(statusRow);
+  seg->setStyleSheet("background:#fde7f0;border-radius:10px;");
+  auto *segl = new QHBoxLayout(seg);
+  segl->setContentsMargins(3, 3, 3, 3);
+  segl->setSpacing(2);
+  nbppTunBtn = new QPushButton("TUN 模式", seg);
+  nbppSysBtn = new QPushButton(tr("系统代理"), seg);
+  nbppTunBtn->setCheckable(true);
+  nbppTunBtn->setFlat(true);
+  nbppSysBtn->setCheckable(true);
+  nbppSysBtn->setFlat(true);
+  segl->addWidget(nbppTunBtn);
+  segl->addWidget(nbppSysBtn);
+  sl->addWidget(seg);
+  nbppStartBtn = new QPushButton(tr("连接"), statusRow);
+  nbppStartBtn->setFixedSize(86, 32);
+  nbppStartBtn->setStyleSheet(
+      "background:#f06292;color:white;font-weight:bold;"
+      "border:none;border-radius:8px;");
+  sl->addWidget(nbppStartBtn);
+  connect(nbppTunBtn, &QPushButton::clicked, this,
+          [this] { ui->checkBox_VPN->click(); });
+  connect(nbppSysBtn, &QPushButton::clicked, this,
+          [this] { ui->checkBox_SystemProxy->click(); });
+  connect(nbppStartBtn, &QPushButton::clicked, this,
+          [this] { ui->start_stop_button->click(); });
+  root->addWidget(statusRow);
+
+  // ---- body: sidebar + stacked pages ----
+  auto *body = new QHBoxLayout;
+  body->setContentsMargins(0, 0, 0, 0);
+  body->setSpacing(0);
+  auto *sidebar = new QWidget(central);
+  sidebar->setFixedWidth(178);
+  sidebar->setStyleSheet(
+      "background:#fff7fa;border-right:1px solid #f6dbe6;");
+  auto *bl = new QVBoxLayout(sidebar);
+  bl->setContentsMargins(10, 12, 10, 10);
+  bl->setSpacing(6);
+  auto mkNav = [&](const QString &t) {
+    auto *b = new QPushButton(t, sidebar);
+    b->setFlat(true);
+    b->setStyleSheet(
+        "text-align:left;padding:9px 12px;border-radius:9px;"
+        "font-size:14px;color:#333;");
+    bl->addWidget(b);
+    return b;
+  };
+  nbppNavNodes = mkNav(tr("节点"));
+  auto *navSub = mkNav(tr("订阅"));
+  auto *navRules = mkNav(tr("规则"));
+  nbppNavLogs = mkNav(tr("日志"));
+  auto *navSettings = mkNav(tr("设置"));
+  auto *grpLbl = new QLabel(tr("订阅分组"), sidebar);
+  grpLbl->setStyleSheet("color:#999;font-size:12px;padding:8px 4px 2px 4px;");
+  bl->addWidget(grpLbl);
+  nbppGroupList = new QListWidget(sidebar);
+  nbppGroupList->setFrameShape(QFrame::NoFrame);
+  nbppGroupList->setStyleSheet(
+      "QListWidget{background:transparent;border:none;}"
+      "QListWidget::item{border-radius:8px;}"
+      "QListWidget::item:selected{background:#fbdce9;}");
+  bl->addWidget(nbppGroupList, 1);
+  auto *card = new QFrame(sidebar);
+  card->setStyleSheet(
+      "background:#ffffff;border:1px solid #f6dbe6;border-radius:10px;");
+  auto *cl = new QVBoxLayout(card);
+  cl->setContentsMargins(10, 8, 10, 8);
+  cl->setSpacing(6);
+  auto mkSwitch = [&](const QString &t, int kind) {
+    auto *row = new QWidget(card);
+    auto *rl = new QHBoxLayout(row);
+    rl->setContentsMargins(0, 0, 0, 0);
+    auto *lab = new QLabel(t, row);
+    lab->setStyleSheet("font-size:12px;color:#333;");
+    rl->addWidget(lab);
+    rl->addStretch(1);
+    auto *sw = new QPushButton(tr("关"), row);
+    sw->setFlat(true);
+    sw->setStyleSheet("font-weight:bold;color:#999;");
+    rl->addWidget(sw);
+    connect(sw, &QPushButton::clicked, this,
+            [this, kind] { nbpp_rule_toggle(kind); });
+    cl->addWidget(row);
+    return sw;
+  };
+  nbppSwPlay = mkSwitch(tr("商店规则"), 0);
+  nbppSwCnDom = mkSwitch(tr("中国域名直连"), 1);
+  nbppSwCnIp = mkSwitch(tr("中国IP直连"), 2);
+  bl->addWidget(card);
+  body->addWidget(sidebar);
+
+  nbppStack = new QStackedWidget(central);
+  nbppStack->addWidget(ui->tabWidget);
+  if (auto *tb = ui->stats_widget->findChild<QTabBar *>())
+    tb->hide();
+  ui->stats_widget->setCurrentIndex(0);
+  nbppStack->addWidget(ui->stats_widget);
+  body->addWidget(nbppStack, 1);
+  root->addLayout(body, 1);
+
+  // Group tabs keep their upstream behavior; the search box and the
+  // one-click test button move into the tab bar's corner.
+  auto *corner = new QWidget(ui->tabWidget);
+  auto *col = new QHBoxLayout(corner);
+  col->setContentsMargins(0, 2, 4, 2);
+  col->setSpacing(6);
+  ui->searchBox->setPlaceholderText(tr("搜索节点…"));
+  col->addWidget(ui->searchBox);
+  ui->url_test_button->setText(tr("一键测速"));
+  col->addWidget(ui->url_test_button);
+  ui->tabWidget->setCornerWidget(corner, Qt::TopRightCorner);
+  connect(ui->searchBox, &QLineEdit::textChanged, this,
+          [this](const QString &t) {
+            if (nbppList)
+              nbppList->setFilter(t.trimmed());
+          });
+  connect(ui->tabWidget, &QTabWidget::currentChanged, this,
+          [this](int) {
+            if (nbppList)
+              nbppList->rebuild();
+          });
+
+  // ---- bottom status bar ----
+  auto *bottom = new QWidget(central);
+  bottom->setFixedHeight(28);
+  bottom->setStyleSheet(
+      "background:#fff5f8;border-top:1px solid #f6dbe6;");
+  auto *bol = new QHBoxLayout(bottom);
+  bol->setContentsMargins(12, 0, 12, 0);
+  bol->setSpacing(16);
+  auto *netLbl = new QLabel(tr("网络：") + nbppNetLabel(), bottom);
+  netLbl->setStyleSheet("color:#666;font-size:12px;");
+  bol->addWidget(netLbl);
+  auto *scanLbl = new QLabel(tr("地区扫描：网络变化时全量自动扫"), bottom);
+  scanLbl->setStyleSheet("color:#666;font-size:12px;");
+  bol->addWidget(scanLbl);
+  nbppBottomScan = new QLabel(tr("上次扫描：—"), bottom);
+  nbppBottomScan->setStyleSheet("color:#666;font-size:12px;");
+  bol->addWidget(nbppBottomScan);
+  bol->addStretch(1);
+  auto *subLbl = new QLabel(
+      tr("订阅自动更新：%1 · 新节点自动测：开")
+          .arg(Configs::dataStore->sub_auto_update >= 30 ? tr("开")
+                                                         : tr("关")),
+      bottom);
+  subLbl->setStyleSheet("color:#666;font-size:12px;");
+  bol->addWidget(subLbl);
+  root->addWidget(bottom);
+
+  // ---- sidebar wiring (reuse the original menus and pages) ----
+  connect(nbppNavNodes, &QPushButton::clicked, this, [this] {
+    nbppStack->setCurrentIndex(0);
+    nbpp_refresh_shell();
+  });
+  connect(nbppNavLogs, &QPushButton::clicked, this, [this] {
+    nbppStack->setCurrentIndex(1);
+    nbpp_refresh_shell();
+  });
+  connect(navSub, &QPushButton::clicked, this,
+          [this] { ui->menu_profiles->exec(QCursor::pos()); });
+  connect(navRules, &QPushButton::clicked, this,
+          [this] { ui->menuRouting_Menu->exec(QCursor::pos()); });
+  connect(navSettings, &QPushButton::clicked, this,
+          [this] { ui->menu_preferences->exec(QCursor::pos()); });
+  connect(nbppGroupList, &QListWidget::currentRowChanged, this,
+          [this](int row) {
+            if (row >= 0 && row < ui->tabWidget->count())
+              ui->tabWidget->setCurrentIndex(row);
+          });
+
+  nbppUiTimer = new QTimer(this);
+  connect(nbppUiTimer, &QTimer::timeout, this,
+          [this] { nbpp_refresh_shell(); });
+  nbppUiTimer->start(1000);
+  nbpp_refresh_shell();
+}
+
+void MainWindow::nbpp_refresh_shell() {
+  if (!nbppStatusText)
+    return;
+  int sid = Configs::dataStore->started_id;
+  auto startedEnt =
+      sid >= 0 ? Configs::profileManager->GetProfile(sid) : nullptr;
+  bool running = startedEnt != nullptr;
+  nbppStatusDot->setStyleSheet(running ? "color:#43a047;font-size:13px;"
+                                       : "color:#bdbdbd;font-size:13px;");
+  nbppStatusText->setText(running ? tr("已连接") : tr("未连接"));
+  nbppStartBtn->setText(running ? tr("断开") : tr("连接"));
+  if (running) {
+    QString loc;
+    if (!startedEnt->test_country.isEmpty())
+      loc = CountryCodeToFlag(startedEnt->test_country.toUpper()) +
+            " " +
+            nbppCountryNameCN(startedEnt->test_country.toUpper()) +
+            " · ";
+    QString lat = startedEnt->latencyInt > 0
+                      ? QString("   %1 ms").arg(startedEnt->latencyInt)
+                      : "";
+    nbppStatusNode->setText(loc + startedEnt->name + lat);
+    if (startedEnt->traffic_data) {
+      qint64 up = startedEnt->traffic_data->uplink;
+      qint64 down = startedEnt->traffic_data->downlink;
+      if (nbppLastUp >= 0)
+        nbppTrafficPill->setText(
+            QString("↑ %1/s   ↓ %2/s")
+                .arg(nbppFmtRate(up - nbppLastUp),
+                     nbppFmtRate(down - nbppLastDown)));
+      nbppLastUp = up;
+      nbppLastDown = down;
+    }
+  } else {
+    nbppStatusNode->setText("");
+    nbppTrafficPill->setText("↑ 0 KB/s   ↓ 0 KB/s");
+    nbppLastUp = -1;
+    nbppLastDown = -1;
+  }
+  auto segStyle = [](bool on) {
+    return on ? "background:#ffffff;color:#c2185b;font-weight:bold;"
+                "border:none;border-radius:8px;padding:5px 14px;"
+              : "background:transparent;color:#c2185b;border:none;"
+                "padding:5px 14px;";
+  };
+  nbppTunBtn->setChecked(ui->checkBox_VPN->isChecked());
+  nbppTunBtn->setStyleSheet(segStyle(ui->checkBox_VPN->isChecked()));
+  nbppSysBtn->setChecked(ui->checkBox_SystemProxy->isChecked());
+  nbppSysBtn->setStyleSheet(
+      segStyle(ui->checkBox_SystemProxy->isChecked()));
+  nbppMaxBtn->setText(isMaximized() ? "❐" : "▢");
+  auto navStyle = [](bool on) {
+    return on ? "text-align:left;padding:9px 12px;border-radius:9px;"
+                "font-size:14px;background:#fbdce9;color:#c2185b;"
+                "font-weight:bold;"
+              : "text-align:left;padding:9px 12px;border-radius:9px;"
+                "font-size:14px;color:#333;";
+  };
+  nbppNavNodes->setStyleSheet(navStyle(nbppStack->currentIndex() == 0));
+  nbppNavLogs->setStyleSheet(navStyle(nbppStack->currentIndex() == 1));
+
+  // Sidebar group list, rebuilt only when the group set changes.
+  QString sig;
+  for (int gid : Configs::profileManager->groupsTabOrder) {
+    auto g = Configs::profileManager->groups[gid];
+    sig += QString::number(gid) + ":" + (g ? g->name : "") + ";";
+  }
+  sig += "|" + QString::number(Configs::dataStore->current_group);
+  if (sig != nbppGroupSig) {
+    nbppGroupSig = sig;
+    nbppGroupList->clear();
+    for (int gid : Configs::profileManager->groupsTabOrder) {
+      auto g = Configs::profileManager->groups[gid];
+      if (!g)
+        continue;
+      auto *row = new QWidget(nbppGroupList);
+      auto *rl = new QHBoxLayout(row);
+      rl->setContentsMargins(10, 5, 10, 5);
+      auto *nm = new QLabel(g->name, row);
+      nm->setStyleSheet("font-size:13px;color:#333;");
+      rl->addWidget(nm);
+      rl->addStretch(1);
+      QString t;
+      auto extra = Configs::GetExtra(g);
+      if (extra && extra->sub_last_update > 0) {
+        auto dt = QDateTime::fromSecsSinceEpoch(extra->sub_last_update);
+        auto today = QDateTime::currentDateTime().date();
+        if (dt.date() == today)
+          t = dt.toString("HH:mm");
+        else if (dt.date() == today.addDays(-1))
+          t = tr("昨天");
+        else
+          t = dt.toString("MM-dd");
+      }
+      auto *tm = new QLabel(t, row);
+      tm->setStyleSheet("font-size:11px;color:#aaa;");
+      rl->addWidget(tm);
+      auto *li = new QListWidgetItem(nbppGroupList);
+      li->setSizeHint(row->sizeHint());
+      nbppGroupList->addItem(li);
+      nbppGroupList->setItemWidget(li, row);
+    }
+    int cur = Configs::profileManager->groupsTabOrder.indexOf(
+        Configs::dataStore->current_group);
+    if (cur >= 0)
+      nbppGroupList->setCurrentRow(cur);
+  }
+
+  // Rule switches reflect the active routing chain.
+  auto swApply = [this](QPushButton *b, bool on) {
+    b->setText(on ? tr("开") : tr("关"));
+    b->setStyleSheet(on ? "font-weight:bold;color:#2e9e4f;"
+                        : "font-weight:bold;color:#999;");
+  };
+  swApply(nbppSwPlay, nbpp_rule_present(0));
+  swApply(nbppSwCnDom, nbpp_rule_present(1));
+  swApply(nbppSwCnIp, nbpp_rule_present(2));
+  if (!nbppLastScan.isEmpty())
+    nbppBottomScan->setText(tr("上次扫描：") + nbppLastScan);
+
+  // The node list can never go stale: rebuild it whenever the current
+  // group's content signature changes (import, tab switch, tests).
+  if (nbppList) {
+    auto g = Configs::profileManager->CurrentGroup();
+    QString lsig = QString::number(Configs::dataStore->current_group) +
+                   "|" + QString::number(sid) + "|";
+    if (g) {
+      lsig += QString::number(g->profiles.size()) + "|";
+      int withCC = 0;
+      qint64 latSum = 0;
+      for (int pid : g->profiles) {
+        auto e = Configs::profileManager->GetProfile(pid);
+        if (e) {
+          if (!e->test_country.isEmpty())
+            withCC++;
+          latSum += e->latencyInt;
+        }
+      }
+      lsig += QString::number(withCC) + "|" + QString::number(latSum);
+    }
+    if (lsig != nbppListSig) {
+      nbppListSig = lsig;
+      nbppList->rebuild();
+    }
+  }
+}
+
 // NekoBox++ auto mode: while connected, keep the connection on the
 // best node of the armed group. The running profile is health-tested
 // every tick (30 s); three consecutive failures switch to the best
@@ -5607,6 +6192,39 @@ skip1:
 // tested (records only) so standby records stay fresh. Arming a
 // group also steers an outside connection into the pool.
 void MainWindow::nbpp_auto_tick() {
+  // Network change -> full region re-scan of every group, one group
+  // per tick so speed tests never overlap.
+  {
+    QStringList addrs;
+    for (const auto &iface : QNetworkInterface::allInterfaces()) {
+      auto f = iface.flags();
+      if (!f.testFlag(QNetworkInterface::IsUp) ||
+          !f.testFlag(QNetworkInterface::IsRunning) ||
+          f.testFlag(QNetworkInterface::IsLoopBack))
+        continue;
+      for (const auto &e : iface.addressEntries())
+        if (e.ip().protocol() == QAbstractSocket::IPv4Protocol)
+          addrs << e.ip().toString();
+    }
+    addrs.sort();
+    QString sig = addrs.join(",");
+    if (!nbppLastAddrs.isEmpty() && sig != nbppLastAddrs &&
+        nbppSweepQueue.isEmpty()) {
+      MW_show_log(tr("网络已变化，重新扫描全部地区"));
+      for (auto &[gid, g] : Configs::profileManager->groups)
+        if (g && !g->profiles.isEmpty())
+          nbppSweepQueue << gid;
+    }
+    nbppLastAddrs = sig;
+    if (!nbppSweepQueue.isEmpty() && speedtestRunning.tryLock()) {
+      speedtestRunning.unlock();
+      int gid = nbppSweepQueue.takeFirst();
+      auto g = Configs::profileManager->groups[gid];
+      if (g)
+        urltest_current_group(g->profiles, true);
+    }
+  }
+
   std::shared_ptr<Configs::Group> armed;
   for (auto &[gid, g] : Configs::profileManager->groups) {
     if (g && g->auto_mode) {

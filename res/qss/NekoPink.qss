@@ -341,3 +341,28 @@ QCheckBox::indicator {
 QCheckBox::indicator:checked {
     background: #F48FB1;
 }
+
+/* NekoBox++ shell: group tabs as pink pills */
+QTabWidget::pane {
+    border: none;
+    background: #FFFFFF;
+}
+
+QTabBar::tab {
+    background: #FDE7F0;
+    color: #C2185B;
+    border: none;
+    border-radius: 9px;
+    padding: 6px 18px;
+    margin: 4px 3px;
+}
+
+QTabBar::tab:selected {
+    background: #F06292;
+    color: #FFFFFF;
+    font-weight: bold;
+}
+
+QTabBar::tab:hover {
+    background: #F8BBD0;
+}
