@@ -14,6 +14,9 @@
 #include <QSystemTrayIcon>
 #include <QtConcurrent>
 #include <QSettings>
+#include <QTimer>
+#include <QSet>
+#include <QMap>
 #include <nekobox/dataStore/Configs.hpp>
 #include <nekobox/stats/connections/connectionLister.hpp>
 #include <nekobox/stats/autotester/ProxyAutoTester.hpp>
@@ -362,6 +365,13 @@ private:
     QThreadPool *parallelCoreCallPool = new QThreadPool(this);
     std::atomic<bool> stopSpeedtest = false;
     QMutex speedtestRunning;
+    // NekoBox++ auto mode state
+    QTimer *nbpp_auto_timer = nullptr;
+    int nbpp_auto_fail = 0;
+    int nbpp_tick_count = 0;
+    int nbpp_auto_cursor = 0;
+    QMap<int, QSet<int>> nbpp_sub_snap;
+    void nbpp_auto_tick();
     QMutex logLock;
     bool force_hide_text_under_buttons = false;
     bool force_hide_tray = false;

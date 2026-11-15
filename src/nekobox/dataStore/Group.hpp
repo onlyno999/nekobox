@@ -62,6 +62,7 @@ namespace Configs
         int id = -1;
         bool archive = false;
         bool is_subscription = false;
+        bool auto_mode = false;
         QString name = "";
         int front_proxy_id = -1;
         int landing_proxy_id = -1;

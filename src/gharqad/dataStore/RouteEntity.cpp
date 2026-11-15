@@ -700,6 +700,24 @@ namespace Configs {
         defaultRule->action = "hijack-dns";
         defaultRule->protocol = "dns";
         defaultChain->Rules << defaultRule;
+        // NekoBox++ defaults: Play Store domains ride the proxy line,
+        // placed before the China rules so store downloads never stall.
+        auto playRule = std::make_shared<RouteRule>();
+        playRule->name = "Play Store";
+        playRule->domain_suffix = {"googleapis.com", "connectivitycheck.gstatic.com",
+            "www.google.com", "play-fe.googleapis.com", "play-lh.googleusercontent.com",
+            "playstoregatewayadapter-pa.googleapis.com", "services.googleapis.cn",
+            "xn--ngstr-lra8j.com", "play.googleapis.com", "mtalk.google.com"};
+        playRule->outboundID = proxyID;
+        defaultChain->Rules << playRule;
+        // China domains/IPs go direct. geosite uses the filtered mirror
+        // (Google domains removed), geoip uses the upstream SagerNet set.
+        auto cnRule = std::make_shared<RouteRule>();
+        cnRule->name = "China Direct";
+        cnRule->rule_set = {"https://raw.githubusercontent.com/onlyno999/sing-rules-filtered/main/rule-set/geosite-cn.srs",
+            "https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/geoip-cn.srs"};
+        cnRule->outboundID = directID;
+        defaultChain->Rules << cnRule;
         return defaultChain;
     }
 

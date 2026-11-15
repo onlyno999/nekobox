@@ -687,6 +687,18 @@ MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent), ui(new Ui::MainWindow) {
 
   post_update_job = [this](std::shared_ptr<Configs::Group> group) {
+    // NekoBox++: test only the profiles this update actually added.
+    if (nbpp_sub_snap.contains(group->id)) {
+      auto snap = nbpp_sub_snap.take(group->id);
+      QList<int> newIds;
+      for (int pid : group->profiles)
+        if (!snap.contains(pid))
+          newIds << pid;
+      if (!newIds.isEmpty()) {
+        MW_show_log(tr("自动测试新节点: %1 个").arg(newIds.size()));
+        runOnUiThread([this, newIds] { urltest_current_group(newIds, true); });
+      }
+    }
     QList<std::shared_ptr<Configs::ProxyEntity>> out_all;
     QString change_text;
     if (Configs::dataStore->sub_rm_duplicates) {
@@ -1005,6 +1017,12 @@ MainWindow::MainWindow(QWidget *parent)
   g_logFlushTimer->setInterval(100);
   connect(g_logFlushTimer, &QTimer::timeout, this, [] { flushPendingLogs(); });
   g_logFlushTimer->start();
+
+  // NekoBox++ auto mode loop
+  nbpp_auto_timer = new QTimer(this);
+  connect(nbpp_auto_timer, &QTimer::timeout, this,
+          [this] { nbpp_auto_tick(); });
+  nbpp_auto_timer->start(30000);
 
   // Listen port if random
   if (Configs::dataStore->random_inbound_port) {
@@ -1902,6 +1920,14 @@ skip_updater_hide:
       TM_auto_update_subsctiption->start(m * 60 * 1000);
   };
   connect(TM_auto_update_subsctiption, &QTimer::timeout, this, [&] {
+    for (auto &[gid, g] : Configs::profileManager->groups) {
+      if (g && g->is_subscription) {
+        QSet<int> snap;
+        for (int pid : g->profiles)
+          snap.insert(pid);
+        nbpp_sub_snap[gid] = snap;
+      }
+    }
     UI_update_all_groups(this->post_update_job, true, &chooseUpdateGroup,
         [this] (std::shared_ptr<const Configs::GroupExtra> extra) -> std::shared_ptr<const Configs::GroupExtra> {
 #ifndef SKIP_JS_UPDATER
@@ -4195,6 +4221,12 @@ void MainWindow::on_menu_update_subscription_triggered() {
   }
 
   mw_sub_updating = true;
+  {
+    QSet<int> snap;
+    for (int pid : group->profiles)
+      snap.insert(pid);
+    nbpp_sub_snap[group->id] = snap;
+  }
   Subscription::groupUpdater->AsyncUpdateGroup(
       group, this->post_update_job, &chooseUpdateGroup,
       [] {
@@ -4752,6 +4784,35 @@ void MainWindow::on_tabWidget_customContextMenuRequested(const QPoint &p) {
     auto group =
         Configs::profileManager->GetGroup(Configs::dataStore->current_group);
     menu->addAction(deleteAction);
+    {
+      auto clickedGid = Configs::profileManager->groupsTabOrder[clickedIndex];
+      auto clickedGroup = Configs::profileManager->groups[clickedGid];
+      if (clickedGroup) {
+        auto *autoAction = new QAction(tr("自动模式"), this);
+        autoAction->setCheckable(true);
+        autoAction->setChecked(clickedGroup->auto_mode);
+        connect(
+            autoAction, &QAction::triggered, this,
+            [this, clickedGid](bool checked) {
+              CHECK_SETTINGS_ACCESS_W
+              for (auto &[gid2, g2] : Configs::profileManager->groups) {
+                if (g2 && g2->auto_mode && gid2 != clickedGid) {
+                  g2->auto_mode = false;
+                  g2->Save();
+                }
+              }
+              auto g = Configs::profileManager->groups[clickedGid];
+              if (g) {
+                g->auto_mode = checked;
+                g->Save();
+              }
+              MW_show_log(checked ? tr("自动模式已开启（本组）")
+                                  : tr("自动模式已关闭"));
+            },
+            Qt::SingleShotConnection);
+        menu->addAction(autoAction);
+      }
+    }
     if (!group->Profiles().empty()) {
       menu->addAction(ui->actionUrl_Test_Group);
       menu->addAction(ui->actionSpeedtest_Group);
@@ -5498,3 +5559,98 @@ skip1:
 #endif
 }
 #endif
+
+// NekoBox++ auto mode: while connected, keep the connection on the
+// best node of the armed group. The running profile is health-tested
+// every tick (30 s); three consecutive failures switch to the best
+// recorded standby. Every 10th tick the next 5 group members are
+// tested (records only) so standby records stay fresh. Arming a
+// group also steers an outside connection into the pool.
+void MainWindow::nbpp_auto_tick() {
+  std::shared_ptr<Configs::Group> armed;
+  for (auto &[gid, g] : Configs::profileManager->groups) {
+    if (g && g->auto_mode) {
+      armed = g;
+      break;
+    }
+  }
+  if (!armed)
+    return;
+  auto startedId = Configs::dataStore->started_id;
+  if (startedId < 0) {
+    nbpp_auto_fail = 0;
+    return;
+  }
+  auto startedEnt = Configs::profileManager->GetProfile(startedId);
+  if (!startedEnt)
+    return;
+  if (!speedtestRunning.tryLock())
+    return; // a test is already running; skip this tick
+  speedtestRunning.unlock();
+
+  auto bestInGroup = [this, armed](int excludeId) -> int {
+    int best = -1;
+    int bestLat = 1 << 30;
+    for (int pid : armed->profiles) {
+      if (pid == excludeId)
+        continue;
+      auto ent = Configs::profileManager->GetProfile(pid);
+      if (!ent)
+        continue;
+      if (ent->latencyInt > 0 && ent->latencyInt < bestLat) {
+        bestLat = ent->latencyInt;
+        best = pid;
+      }
+    }
+    return best;
+  };
+
+  nbpp_tick_count++;
+  if (startedEnt->gid != armed->id) {
+    int best = bestInGroup(-1);
+    if (best >= 0 && best != startedId) {
+      MW_show_log(tr("自动模式：切入本组最快节点"));
+      profile_start(best, true);
+    }
+    return;
+  }
+
+  bool doStandby = (nbpp_tick_count % 10 == 0);
+  urltest_profile(
+      startedEnt, true,
+      [this, armed, startedId, doStandby, bestInGroup](const QList<int> &) {
+        auto ent = Configs::profileManager->GetProfile(startedId);
+        if (!ent)
+          return;
+        if (Configs::dataStore->started_id != startedId)
+          return; // selection changed while testing
+        if (ent->latencyInt < 0) {
+          if (++nbpp_auto_fail >= 3) {
+            nbpp_auto_fail = 0;
+            int best = bestInGroup(startedId);
+            if (best >= 0) {
+              MW_show_log(tr("自动模式：当前节点无响应，自动切换"));
+              profile_start(best, true);
+              return;
+            }
+          }
+        } else {
+          nbpp_auto_fail = 0;
+        }
+        if (doStandby) {
+          auto profs = armed->profiles;
+          if (!profs.isEmpty()) {
+            QList<int> batch;
+            int n = profs.size();
+            for (int i = 0; i < n && batch.size() < 5; i++) {
+              int pid = profs[(nbpp_auto_cursor + i) % n];
+              if (pid != startedId)
+                batch << pid;
+            }
+            nbpp_auto_cursor = (nbpp_auto_cursor + 5) % n;
+            if (!batch.isEmpty())
+              urltest_current_group(batch, true);
+          }
+        }
+      });
+}
