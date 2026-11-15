@@ -1065,8 +1065,9 @@ MainWindow::MainWindow(QWidget *parent)
   };
   nbppList->rebuild();
 
-  // NekoBox++ mockup shell: custom chrome around the original widgets.
-  nbpp_build_shell();
+  // NekoBox++ mockup shell is built at the END of this constructor:
+  // it detaches the splitter's children, so it must run only after all
+  // upstream setup (event filters on splitter handles etc.) is done.
 
   // Listen port if random
   if (Configs::dataStore->random_inbound_port) {
@@ -1188,7 +1189,8 @@ MainWindow::MainWindow(QWidget *parent)
   ui->label_running->installEventFilter(this);
   ui->label_inbound->installEventFilter(this);
   ui->splitter->installEventFilter(this);
-  ui->splitter->handle(1)->installEventFilter(this);
+  if (auto *splitterHandle = ui->splitter->handle(1))
+    splitterHandle->installEventFilter(this);
   ui->tabWidget->installEventFilter(this);
   //
   RegisterHotkey(false);
@@ -2026,6 +2028,10 @@ skip_updater_hide:
   Configs::windowSettings->first_start = false;
 
   this->refresh_groups();
+
+  // NekoBox++ mockup shell: custom chrome around the original widgets.
+  // Runs last: it reparents tabWidget/stats_widget out of the splitter.
+  nbpp_build_shell();
 }
 
 void MainWindow::closeEvent(QCloseEvent *event) {
@@ -5762,6 +5768,9 @@ void MainWindow::nbpp_rule_toggle(int kind) {
 }
 
 void MainWindow::nbpp_build_shell() {
+  // Changing window flags unmaps the window; remember visibility and
+  // restore it at the end, otherwise the app starts invisible.
+  const bool wasVisible = isVisible();
   setWindowFlag(Qt::FramelessWindowHint, true);
 
   auto *root = qobject_cast<QVBoxLayout *>(ui->centralwidget->layout());
@@ -6036,6 +6045,9 @@ void MainWindow::nbpp_build_shell() {
           [this] { nbpp_refresh_shell(); });
   nbppUiTimer->start(1000);
   nbpp_refresh_shell();
+
+  if (wasVisible)
+    show();
 }
 
 void MainWindow::nbpp_refresh_shell() {
