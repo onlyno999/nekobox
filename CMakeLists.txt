@@ -285,6 +285,7 @@ set(PROJECT_SOURCES
 
         ${GHARQAD}/ui/mainwindow_rpc.cpp
         ${GHARQAD}/ui/mainwindow.cpp
+        ${GHARQAD}/ui/NbppNodeList.cpp
         ${GHARQAD}/ui/mainwindow_table.cpp
         ${NYXARIA}/ui/mainwindow.h
         ${NYXARIA}/ui/mainwindow_table.h

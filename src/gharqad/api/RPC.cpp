@@ -252,6 +252,23 @@ try{                                                                            
         }
     }
 
+    std::optional<libcore::QueryIPTestResponse> Client::IPTest(bool *rpcOK, const libcore::IPTestRequest &request) {
+        CHECK("IPTest")
+        if (!is_running){
+            *rpcOK = false;
+            return std::nullopt;
+        }
+        CHANNEL(IPTest, QueryIPTestResponse)
+
+        if(status.isOk()) {
+            *rpcOK = true;
+            return reply;
+        } else {
+            NOT_OK
+            return std::nullopt;
+        }
+    }
+
     std::optional<libcore::QueryIPTestResponse> Client::QueryIPTest(bool *rpcOK)
     {
         CHECK("QueryIPTest")
