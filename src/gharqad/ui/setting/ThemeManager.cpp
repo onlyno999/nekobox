@@ -25,7 +25,8 @@ std::tuple<QString, bool> ThemeManager::getPath(const QString & theme){
     else if (lowerTheme == "dark"){ return std::make_tuple(":nekobox/qss/MaterialDark.qss", true); } 
     else if (lowerTheme == "amoled"){ return std::make_tuple(":nekobox/qss/AMOLED.qss", true); } 
     else if (lowerTheme == "aqua") { return std::make_tuple(":nekobox/qss/Aqua.qss", true); } 
-    else if (lowerTheme == "kawaii") { return std::make_tuple(":nekobox/qss/Kawaii.qss", true); } 
+    else if (lowerTheme == "kawaii") { return std::make_tuple(":nekobox/qss/Kawaii.qss", true); }
+    else if (lowerTheme == "nekopink") { return std::make_tuple(":nekobox/qss/NekoPink.qss", true); }
     else if (lowerTheme == "flatgray") { return std::make_tuple(":nekobox/qss/flatgray.css", true); } 
     else if (lowerTheme == "lightblue") { return std::make_tuple(":nekobox/qss/lightblue.css", true); } 
     else if (lowerTheme == "blacksoft") { return std::make_tuple(":nekobox/qss/blacksoft.css", true); } 
@@ -38,7 +39,8 @@ int ThemeManager::getMode(const QString & theme){
     else if (lowerTheme == "dark"){ return 1; } 
     else if (lowerTheme == "amoled"){ return 1; } 
     else if (lowerTheme == "aqua") { return 1; } 
-    else if (lowerTheme == "kawaii") { return 2; } 
+    else if (lowerTheme == "kawaii") { return 2; }
+    else if (lowerTheme == "nekopink") { return 2; }
     else if (lowerTheme == "flatgray") { return 2; } 
     else if (lowerTheme == "lightblue") { return 2; } 
     else if (lowerTheme == "blacksoft") { return 1; } 

@@ -328,6 +328,7 @@ DialogBasicSettings::DialogBasicSettings(MainWindow *parent)
     ui->theme->addItems(QStyleFactory::keys());
     ui->theme->addItem("Dark");
     ui->theme->addItem("Kawaii");
+    ui->theme->addItem("NekoPink");
     ui->theme->addItem("BlackSoft");
     ui->theme->addItem("AMOLED");
     ui->theme->addItem("Aqua");

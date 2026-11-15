@@ -834,7 +834,7 @@ MainWindow::MainWindow(QWidget *parent)
 #endif
     software_name = MainWindowState::displayName(
         Configs::windowSettings->program_name,
-        globalSettings.value("program_name", "NekoBox").toString());
+        globalSettings.value("program_name", "NekoBox++").toString());
     software_core_name =
         globalSettings.value("program_core_name", "sing-box").toString();
   }

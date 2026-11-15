@@ -45,5 +45,6 @@
       <file>qss/Aqua.qss</file>
       <file>qss/MaterialDark.qss</file>
       <file>qss/Kawaii.qss</file>
+      <file>qss/NekoPink.qss</file>
   </qresource>
 </RCC>

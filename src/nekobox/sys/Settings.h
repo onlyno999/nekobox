@@ -97,7 +97,7 @@ public:
   QSettings settings() override;
   QString theme =
 #ifdef Q_OS_WIN
-      "System"
+      "NekoPink"
 #else
       "Fusion"
 #endif
@@ -146,7 +146,7 @@ public:
   QString language = "";
   bool show_system_dns = false;
   bool first_start = true;
-  QString program_name = "";
+  QString program_name = "NekoBox++";
 
   bool enable_indicator_borders = true;
   int indicator_border_width = 2;
