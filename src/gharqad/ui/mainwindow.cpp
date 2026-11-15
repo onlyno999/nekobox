@@ -29,6 +29,8 @@
 #include <nekobox/sys/Process.hpp>
 #include <nekobox/ui/group/GroupItem.h>
 #include <nekobox/ui/mainwindow.h>
+#include <QGridLayout>
+#include "NbppNodeList.hpp"
 #include <nekobox/ui/MainWindowState.hpp>
 #include <nekobox/ui/utils/MapListModel.hpp>
 #include <nekobox/ui/setting/shutdownoverlay.hpp>
@@ -1023,6 +1025,38 @@ MainWindow::MainWindow(QWidget *parent)
   connect(nbpp_auto_timer, &QTimer::timeout, this,
           [this] { nbpp_auto_tick(); });
   nbpp_auto_timer->start(30000);
+
+  // NekoBox++ sectioned node list (mockup layout) replacing the table.
+  nbppList = new NbppNodeList(this);
+  if (auto *pw = ui->proxyListTable->parentWidget()) {
+    if (auto *gl = qobject_cast<QGridLayout *>(pw->layout())) {
+      gl->addWidget(nbppList, 0, 0);
+    }
+  }
+  ui->proxyListTable->hide();
+  nbppList->onStartProfile = [this](int id) { profile_start(id, false); };
+  nbppList->onStopProfile = [this] { profile_stop(false, false, true); };
+  nbppList->onTestProfile = [this](int id) {
+    auto ent = Configs::profileManager->GetProfile(id);
+    if (ent)
+      urltest_profile(ent, false);
+  };
+  nbppList->onEditProfile = [this](int id) {
+    auto dialog = new DialogEditProfile("", id, this);
+    dialog->show();
+  };
+  nbppList->onDeleteProfile = [this](int id) {
+    if (QMessageBox::question(this, tr("Confirmation"),
+                              tr("Remove this profile?")) ==
+        QMessageBox::Yes) {
+      Configs::profileManager->DeleteProfile(id);
+      refresh_proxy_list();
+    }
+  };
+  nbppList->onArmToggle = [this](int gid, const QString &cc) {
+    nbpp_arm_toggle(gid, cc);
+  };
+  nbppList->rebuild();
 
   // Listen port if random
   if (Configs::dataStore->random_inbound_port) {
@@ -3228,6 +3262,8 @@ void MainWindow::refresh_proxy_traffic(const int &id) {
   if (tableModel) {
     tableModel->notifyProfileChanged(id);
   }
+  if (nbppList)
+    nbppList->rebuildThrottled();
 }
 
 void MainWindow::refresh_proxy_list_impl(const int &id,
@@ -3405,6 +3441,8 @@ void MainWindow::refresh_proxy_list_impl_refresh_data(const int &id,
   ui->proxyListTable->setUpdatesEnabled(true);
 
   this->tableModel->refresh();
+  if (nbppList)
+    nbppList->rebuild();
 }
 /*
 void MainWindow::refresh_table_item(
@@ -4798,12 +4836,14 @@ void MainWindow::on_tabWidget_customContextMenuRequested(const QPoint &p) {
               for (auto &[gid2, g2] : Configs::profileManager->groups) {
                 if (g2 && g2->auto_mode && gid2 != clickedGid) {
                   g2->auto_mode = false;
+                  g2->auto_country = "";
                   g2->Save();
                 }
               }
               auto g = Configs::profileManager->groups[clickedGid];
               if (g) {
                 g->auto_mode = checked;
+                g->auto_country = "";
                 g->Save();
               }
               MW_show_log(checked ? tr("自动模式已开启（本组）")
@@ -5588,7 +5628,12 @@ void MainWindow::nbpp_auto_tick() {
     return; // a test is already running; skip this tick
   speedtestRunning.unlock();
 
-  auto bestInGroup = [this, armed](int excludeId) -> int {
+  auto inPool = [armed](const std::shared_ptr<Configs::ProxyEntity> &ent) {
+    return armed->auto_country.isEmpty() ||
+           ent->test_country.toUpper() == armed->auto_country;
+  };
+
+  auto bestInGroup = [this, armed, inPool](int excludeId) -> int {
     int best = -1;
     int bestLat = 1 << 30;
     for (int pid : armed->profiles) {
@@ -5596,6 +5641,8 @@ void MainWindow::nbpp_auto_tick() {
         continue;
       auto ent = Configs::profileManager->GetProfile(pid);
       if (!ent)
+        continue;
+      if (!inPool(ent))
         continue;
       if (ent->latencyInt > 0 && ent->latencyInt < bestLat) {
         bestLat = ent->latencyInt;
@@ -5606,7 +5653,7 @@ void MainWindow::nbpp_auto_tick() {
   };
 
   nbpp_tick_count++;
-  if (startedEnt->gid != armed->id) {
+  if (startedEnt->gid != armed->id || !inPool(startedEnt)) {
     int best = bestInGroup(-1);
     if (best >= 0 && best != startedId) {
       MW_show_log(tr("自动模式：切入本组最快节点"));
@@ -5618,7 +5665,7 @@ void MainWindow::nbpp_auto_tick() {
   bool doStandby = (nbpp_tick_count % 10 == 0);
   urltest_profile(
       startedEnt, true,
-      [this, armed, startedId, doStandby, bestInGroup](const QList<int> &) {
+      [this, armed, startedId, doStandby, bestInGroup, inPool](const QList<int> &) {
         auto ent = Configs::profileManager->GetProfile(startedId);
         if (!ent)
           return;
@@ -5638,12 +5685,17 @@ void MainWindow::nbpp_auto_tick() {
           nbpp_auto_fail = 0;
         }
         if (doStandby) {
-          auto profs = armed->profiles;
-          if (!profs.isEmpty()) {
+          QList<int> pool;
+          for (int pid : armed->profiles) {
+            auto e = Configs::profileManager->GetProfile(pid);
+            if (e && inPool(e))
+              pool << pid;
+          }
+          if (!pool.isEmpty()) {
             QList<int> batch;
-            int n = profs.size();
+            int n = pool.size();
             for (int i = 0; i < n && batch.size() < 5; i++) {
-              int pid = profs[(nbpp_auto_cursor + i) % n];
+              int pid = pool[(nbpp_auto_cursor + i) % n];
               if (pid != startedId)
                 batch << pid;
             }
@@ -5653,4 +5705,26 @@ void MainWindow::nbpp_auto_tick() {
           }
         }
       });
+}
+
+// NekoBox++: arm/disarm the auto-mode pool for one (group, region)
+// section, as toggled from the node list section headers. Arming is
+// exclusive: any other group's pool is disarmed.
+void MainWindow::nbpp_arm_toggle(int gid, const QString &cc) {
+  auto g = Configs::profileManager->groups[gid];
+  if (!g)
+    return;
+  bool disarm = g->auto_mode && g->auto_country == cc;
+  for (auto &[gid2, g2] : Configs::profileManager->groups) {
+    if (g2 && g2->auto_mode && gid2 != gid) {
+      g2->auto_mode = false;
+      g2->auto_country = "";
+      g2->Save();
+    }
+  }
+  g->auto_mode = !disarm;
+  g->auto_country = disarm ? "" : cc;
+  g->Save();
+  MW_show_log(g->auto_mode ? tr("自动模式已开启") : tr("自动模式已关闭"));
+  refresh_proxy_list();
 }

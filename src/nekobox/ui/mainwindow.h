@@ -135,6 +135,8 @@ namespace Ui {
 }
 QT_END_NAMESPACE
 
+class NbppNodeList;
+
 class MainWindow : public QMainWindow {
     Q_OBJECT
 
@@ -372,6 +374,8 @@ private:
     int nbpp_auto_cursor = 0;
     QMap<int, QSet<int>> nbpp_sub_snap;
     void nbpp_auto_tick();
+    void nbpp_arm_toggle(int gid, const QString &cc);
+    NbppNodeList *nbppList = nullptr;
     QMutex logLock;
     bool force_hide_text_under_buttons = false;
     bool force_hide_tray = false;
@@ -503,6 +507,8 @@ private:
     void stopTests();
 
     void runURLTest(const QString& config, bool useDefault, const QStringList& outboundTags, const QMap<QString, int>& tag2entID, int entID = -1);
+
+    void runIPTest(const QString& config, bool useDefault, const QStringList& outboundTags, const QMap<QString, int>& tag2entID, int entID = -1);
 
     void url_test_current();
 

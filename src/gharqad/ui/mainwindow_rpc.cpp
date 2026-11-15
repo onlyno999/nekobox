@@ -194,6 +194,50 @@ void MainWindow::urltest_profile(std::shared_ptr<Configs::ProxyEntity> entity,
     urltest_current_group({entity->Id()}, skip_last_url_test_warning, finish);
 }
 
+// NekoBox++: region test piggybacked on the url test flow. Runs the
+// core's synchronous IP test against the same test config and stores
+// the exit country code on each profile (test_country), which drives
+// the region sections of the node list.
+void MainWindow::runIPTest(const QString& config, bool useDefault, const QStringList& outboundTags, const QMap<QString, int>& tag2entID, int entID) {
+    if (stopSpeedtest.load()) {
+        return;
+    }
+    libcore::IPTestRequest req;
+    req.config = config.toStdString();
+    req.outbound_tags = QListStr2VectorStr(outboundTags);
+    req.use_default_outbound = useDefault;
+    req.max_concurrency = Configs::dataStore->test_concurrent;
+    req.test_timeout_ms = Configs::dataStore->url_test_timeout_ms;
+    bool ok;
+    auto resp = defaultClient->IPTest(&ok, req);
+    if (!ok || !resp) {
+        return;
+    }
+    bool changed = false;
+    for (const auto& res : resp->results) {
+        int id = entID;
+        if (id < 0) {
+            auto tag = QString::fromUtf8(res.outbound_tag.c_str());
+            if (!tag2entID.contains(tag)) {
+                continue;
+            }
+            id = tag2entID[tag];
+        }
+        auto ent = Configs::profileManager->GetProfile(id);
+        if (ent == nullptr) {
+            continue;
+        }
+        if (!res.country_code.empty()) {
+            ent->test_country = QString::fromUtf8(res.country_code.c_str()).toUpper();
+            ent->Save();
+            changed = true;
+        }
+    }
+    if (changed) {
+        runOnUiThread([this] { refresh_proxy_list(); });
+    }
+}
+
 void MainWindow::urltest_current_group(const QList<int>& profiles,  
         bool skip_last_url_test_warning, const std::function<void(const QList<int>&)> &finish) {
     if (profiles.isEmpty()) {
@@ -257,6 +301,7 @@ void MainWindow::urltest_current_group(const QList<int>& profiles,
                         break;
                     }
                     MainWindow::runURLTest(it.value(), true, {}, {}, it.key());
+                    MainWindow::runIPTest(it.value(), true, {}, {}, it.key());
                 }
                 counter++;
                 if (counter.load() == testCount) {
@@ -269,6 +314,8 @@ void MainWindow::urltest_current_group(const QList<int>& profiles,
         if (!buildObject->outboundTags.isEmpty()) {
             auto func = [this, &buildObject, &counter, testCount]() {
                 MainWindow::runURLTest(QJsonObject2QString(buildObject->coreConfig, false), 
+                    false, buildObject->outboundTags, buildObject->tag2entID);
+                MainWindow::runIPTest(QJsonObject2QString(buildObject->coreConfig, false),
                     false, buildObject->outboundTags, buildObject->tag2entID);
                 counter++;
                 if (counter.load() == testCount) {

@@ -106,6 +106,7 @@ namespace Configs
         ADD_MAP("profiles", profiles, integerList);
         ADD_MAP("is_subscription", is_subscription, boolean);
         ADD_MAP("auto_mode", auto_mode, boolean);
+        ADD_MAP("auto_country", auto_country, string);
     //    ADD_MAP("url", url, string);
     //    ADD_MAP("info", info, string);
     //    _add(new configItem("notes", &notes, string));

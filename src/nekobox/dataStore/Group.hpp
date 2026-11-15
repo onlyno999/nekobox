@@ -63,6 +63,7 @@ namespace Configs
         bool archive = false;
         bool is_subscription = false;
         bool auto_mode = false;
+        QString auto_country = "";
         QString name = "";
         int front_proxy_id = -1;
         int landing_proxy_id = -1;
