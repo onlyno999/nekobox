@@ -7,6 +7,8 @@
 #include <QLabel>
 #include <QMenu>
 #include <QMouseEvent>
+#include <QPainter>
+#include <QPalette>
 #include <QPushButton>
 #include <QScrollArea>
 #include <QScrollBar>
@@ -56,13 +58,22 @@ QString fmtBytes(qint64 b) {
 }
 
 const char *kCardStyle =
-    "background:#ffffff;border:1px solid #f6dbe6;border-radius:10px;";
+    "background:#ffffff;border:1px solid #f3dbe4;border-radius:12px;";
 const char *kCardStartedStyle =
-    "background:#fff5f9;border:2px solid #f06292;border-radius:10px;";
+    "background:#fff5f9;border:2px solid #f06292;border-radius:12px;";
 const char *kCardSelectedStyle =
-    "background:#fffafc;border:2px solid #f8bbd0;border-radius:10px;";
+    "background:#fffafc;border:2px solid #f8bbd0;border-radius:12px;";
+
+// No drop shadows: a QGraphicsEffect on cards inside a scroll area
+// breaks the area's paint optimisation and left unpainted bands.
+inline void nbppCardShadow(QWidget *) {}
 
 } // namespace
+
+void NbppNodeList::paintEvent(QPaintEvent *) {
+  QPainter p(this);
+  p.fillRect(rect(), Qt::white);
+}
 
 QString nbppCountryNameCN(const QString &cc) {
   static const QMap<QString, QString> names = {
@@ -89,12 +100,39 @@ void NbppNodeList::setFilter(const QString &text) {
 }
 
 NbppNodeList::NbppNodeList(QWidget *parent) : QWidget(parent) {
+  // Paint an opaque white background through the palette: plain
+  // QWidgets do not honor stylesheet backgrounds, and on a translucent
+  // window whatever is behind would show through the gaps.
+  auto whiteFill = [](QWidget *w) {
+    w->setAutoFillBackground(true);
+    QPalette pal = w->palette();
+    pal.setColor(QPalette::Window, Qt::white);
+    // Scroll viewports paint with Base, not Window — both must be set
+    // or the area below the content shows the (dark) palette base.
+    pal.setColor(QPalette::Base, Qt::white);
+    w->setPalette(pal);
+  };
+  whiteFill(this);
   auto *root = new QVBoxLayout(this);
   root->setContentsMargins(0, 0, 0, 0);
   area = new QScrollArea(this);
   area->setWidgetResizable(true);
   area->setFrameShape(QFrame::NoFrame);
+  whiteFill(area);
+  whiteFill(area->viewport());
+  area->setStyleSheet(
+      "QScrollBar:vertical{width:8px;background:transparent;}"
+      "QScrollBar::handle:vertical{background:#f0c3d6;"
+      "border-radius:4px;min-height:30px;}"
+      "QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical"
+      "{height:0;}"
+      "QScrollBar:horizontal{height:8px;background:transparent;}"
+      "QScrollBar::handle:horizontal{background:#f0c3d6;"
+      "border-radius:4px;min-width:30px;}"
+      "QScrollBar::add-line:horizontal,QScrollBar::sub-line:horizontal"
+      "{width:0;}");
   content = new QWidget(area);
+  whiteFill(content);
   lay = new QVBoxLayout(content);
   lay->setContentsMargins(6, 6, 6, 6);
   lay->setSpacing(8);
@@ -182,9 +220,9 @@ void NbppNodeList::rebuild() {
     // --- section header ---
     auto *header = new QWidget(content);
     header->setStyleSheet(
-        "background:#fdeef4;border-radius:8px;");
+        "background:#fdf0f4;border-radius:10px;");
     auto *hl = new QHBoxLayout(header);
-    hl->setContentsMargins(10, 6, 10, 6);
+    hl->setContentsMargins(14, 9, 12, 9);
     QString title;
     if (cc.isEmpty())
       title = QString("？ 未检测 · %1").arg(ents.size());
@@ -243,8 +281,9 @@ void NbppNodeList::rebuild() {
       row->setStyleSheet(isStarted ? kCardStartedStyle
                                    : (pid == selectedId ? kCardSelectedStyle
                                                          : kCardStyle));
+      nbppCardShadow(row);
       auto *rl = new QHBoxLayout(row);
-      rl->setContentsMargins(12, 8, 12, 8);
+      rl->setContentsMargins(14, 10, 14, 10);
       rl->setSpacing(8);
 
       auto *name = new QLabel(ent->name, row);

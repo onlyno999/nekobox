@@ -394,7 +394,7 @@ private:
     QPushButton *nbppSwPlay = nullptr;
     QPushButton *nbppSwCnDom = nullptr;
     QPushButton *nbppSwCnIp = nullptr;
-    QListWidget *nbppGroupList = nullptr;
+    QWidget *nbppGroupBox = nullptr;
     QLabel *nbppBottomScan = nullptr;
     QStackedWidget *nbppStack = nullptr;
     QTimer *nbppUiTimer = nullptr;

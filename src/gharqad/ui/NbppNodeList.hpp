@@ -5,6 +5,8 @@
 #include <QString>
 #include <functional>
 
+class QPaintEvent;
+
 class QScrollArea;
 class QVBoxLayout;
 
@@ -29,6 +31,9 @@ public:
   std::function<void(int)> onEditProfile;
   std::function<void(int)> onDeleteProfile;
   std::function<void(int, const QString &)> onArmToggle;
+
+protected:
+  void paintEvent(QPaintEvent *event) override;
 
 private:
   QScrollArea *area = nullptr;

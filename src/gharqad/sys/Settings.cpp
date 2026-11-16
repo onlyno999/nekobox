@@ -1,3 +1,4 @@
+#include <QFile>
 #include <nekobox/sys/Settings.h>
 #include <nekobox/dataStore/ResourceEntity.hpp>
 #include <nekobox/dataStore/Utils.hpp>
@@ -230,8 +231,16 @@ QString getApplicationPath() { return software_path; }
 #endif
 
 QString getCorePath() {
-  return getResource(  NKR_CORE_NAME );
-    //       qDebug() << "Default Instead: " << core_path;
+  QString p = getResource(NKR_CORE_NAME);
+  if (!p.startsWith(":/") && QFile::exists(p)) return p;
+  // getResource fell through to a Qt resource path (":/..."), which
+  // QProcess cannot exec. Probe the real filesystem locations and
+  // hand back a real path either way, so a failure names the file.
+  const QString beside = getRootResource(NKR_CORE_NAME);
+  if (QFile::exists(beside)) return beside;
+  const QString inPublic = getResourcesDir() + "/" + NKR_CORE_NAME;
+  if (QFile::exists(inPublic)) return inPublic;
+  return beside;
 }
 
 bool isFileAppendable(QString filePath) {

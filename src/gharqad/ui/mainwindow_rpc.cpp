@@ -240,9 +240,17 @@ void MainWindow::runIPTest(const QString& config, bool useDefault, const QString
     }
 }
 
-void MainWindow::urltest_current_group(const QList<int>& profiles,  
+void MainWindow::urltest_current_group(const QList<int>& profiles,
         bool skip_last_url_test_warning, const std::function<void(const QList<int>&)> &finish) {
     if (profiles.isEmpty()) {
+        return;
+    }
+    // NekoBox++: every test needs the core for CheckConfig. If it died,
+    // restart it and say so plainly instead of skipping every config
+    // with "core is not running" errors.
+    if (!Configs::dataStore->core_running && core_process) {
+        MW_show_log(tr("核心未运行，正在重启核心，本次测试跳过，稍后再测"));
+        runOnThread([this] { core_process->Restart(); }, DS_cores);
         return;
     }
     if (!speedtestRunning.tryLock()) {
@@ -864,7 +872,9 @@ void MainWindow::profile_start(int _id, bool do_not_test) {
             [=, this] {
 //                MW_show_log(tr("Try to start the config, but the core has not listened to the RPC port, so restart it..."));
                 core_process->start_profile_when_core_is_up = ent->id;
- //               core_process->Restart();
+                // NekoBox++: upstream had the restart commented out, so a
+                // dead core made the connect button a silent no-op.
+                core_process->Restart();
             },
             DS_cores);
         mu_starting.unlock();

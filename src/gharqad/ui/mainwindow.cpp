@@ -37,6 +37,9 @@
 #include <QFrame>
 #include <QLabel>
 #include <QNetworkInterface>
+#include <QPainter>
+#include <QPalette>
+#include <QPainterPath>
 #include <QStackedWidget>
 #include <nekobox/ui/MainWindowState.hpp>
 #include <nekobox/ui/utils/MapListModel.hpp>
@@ -1084,6 +1087,9 @@ MainWindow::MainWindow(QWidget *parent)
 #endif
 
   QString core_path = getCorePath();
+  MW_show_log(QString("核心路径：%1（%2）")
+             .arg(core_path,
+                  QFile::exists(core_path) ? "文件在" : "文件不存在"));
 
   QStringList args;
   if (Configs::dataStore->log_level == "debug")
@@ -2222,6 +2228,34 @@ void MainWindow::show_group(int gid) {
   ui->tabWidget->widget(groupId2TabIndex(gid))
       ->layout()
       ->addWidget(ui->proxyListTable);
+
+  // NekoBox++: the card list must follow the group tab just like the
+  // table does, otherwise every group after the first shows a blank page.
+  if (nbppList) {
+    auto *page = ui->tabWidget->widget(groupId2TabIndex(gid));
+    auto *lay = page->layout();
+    lay->addWidget(nbppList);
+    // Fill the whole page (a zero-stretch cell leaves the rest of the
+    // page unpainted) and paint the page itself white.
+    if (auto *box = qobject_cast<QBoxLayout *>(lay))
+      box->setStretchFactor(nbppList, 1);
+    else if (auto *grid = qobject_cast<QGridLayout *>(lay)) {
+      // Stretch the cell the list actually landed in — the profiles
+      // page grid has other (invisible) rows, and stretching row 0
+      // pushes the list to the bottom.
+      int idx = grid->indexOf(nbppList);
+      int row = 0, col = 0, rs = 1, cs = 1;
+      if (idx >= 0)
+        grid->getItemPosition(idx, &row, &col, &rs, &cs);
+      grid->setRowStretch(row, 1);
+      grid->setColumnStretch(col, 1);
+    }
+    page->setAutoFillBackground(true);
+    QPalette pal = page->palette();
+    pal.setColor(QPalette::Window, Qt::white);
+    page->setPalette(pal);
+    nbppList->rebuild();
+  }
 
   refresh_table_columns();
 
@@ -4902,6 +4936,18 @@ return_deffer:
 // eventFilter
 
 bool MainWindow::eventFilter(QObject *obj, QEvent *event) {
+  // NekoBox++ shell: sidebar group rows are frames; a press switches
+  // to that group's tab.
+  if (event->type() == QEvent::MouseButtonPress &&
+      obj->property("nbppGroupRow").isValid()) {
+    auto *me = dynamic_cast<QMouseEvent *>(event);
+    if (me->button() == Qt::LeftButton) {
+      int row = obj->property("nbppGroupRow").toInt();
+      if (row >= 0 && row < ui->tabWidget->count())
+        ui->tabWidget->setCurrentIndex(row);
+      return true;
+    }
+  }
   // NekoBox++ shell: frameless window drag / double-click maximize on
   // the custom title bar.
   if (nbppTitleBar != nullptr && obj == nbppTitleBar) {
@@ -5767,11 +5813,81 @@ void MainWindow::nbpp_rule_toggle(int kind) {
   nbpp_refresh_shell();
 }
 
+// Sidebar nav icons drawn to match the approved mockup: simple
+// monochrome glyphs (grid / swap arrows / tag / list / gear), tinted
+// gray when idle and deep pink when the row is selected.
+static QIcon nbppNavIcon(int kind, const QColor &color) {
+  QPixmap pm(40, 40);
+  pm.fill(Qt::transparent);
+  QPainter p(&pm);
+  p.setRenderHint(QPainter::Antialiasing, true);
+  QPen pen(color, 3.0);
+  pen.setCapStyle(Qt::RoundCap);
+  pen.setJoinStyle(Qt::RoundJoin);
+  p.setPen(pen);
+  p.setBrush(Qt::NoBrush);
+  switch (kind) {
+  case 0: // grid of four rounded squares
+    p.setBrush(color);
+    p.setPen(Qt::NoPen);
+    for (int dx : {5, 23})
+      for (int dy : {5, 23})
+        p.drawRoundedRect(QRectF(dx, dy, 12, 12), 3, 3);
+    break;
+  case 1: // up / down arrows
+    p.drawLine(QPointF(13, 33), QPointF(13, 9));
+    p.drawLine(QPointF(6, 16), QPointF(13, 8));
+    p.drawLine(QPointF(20, 16), QPointF(13, 8));
+    p.drawLine(QPointF(27, 7), QPointF(27, 31));
+    p.drawLine(QPointF(20, 24), QPointF(27, 32));
+    p.drawLine(QPointF(34, 24), QPointF(27, 32));
+    break;
+  case 2: // tag
+    p.drawRoundedRect(QRectF(7, 12, 26, 17), 4, 4);
+    p.setBrush(color);
+    p.setPen(Qt::NoPen);
+    p.drawEllipse(QRectF(12, 17.5, 5, 5));
+    break;
+  case 3: // list
+    for (int i = 0; i < 3; i++) {
+      qreal y = 10 + i * 10;
+      p.setBrush(color);
+      p.setPen(Qt::NoPen);
+      p.drawEllipse(QRectF(6, y - 2, 4, 4));
+      p.setPen(pen);
+      p.drawLine(QPointF(15, y), QPointF(34, y));
+    }
+    break;
+  default: // gear
+    p.drawEllipse(QRectF(13, 13, 14, 14));
+    for (int i = 0; i < 8; i++) {
+      p.save();
+      p.translate(20, 20);
+      p.rotate(i * 45.0);
+      p.drawLine(QPointF(0, -10), QPointF(0, -15));
+      p.restore();
+    }
+    break;
+  }
+  p.end();
+  return QIcon(pm);
+}
+
 void MainWindow::nbpp_build_shell() {
   // Changing window flags unmaps the window; remember visibility and
   // restore it at the end, otherwise the app starts invisible.
   const bool wasVisible = isVisible();
   setWindowFlag(Qt::FramelessWindowHint, true);
+  // Opaque window: with WA_TranslucentBackground every region no
+  // widget painted showed through (black on X11, desktop junk on
+  // Windows). Square corners are an acceptable price.
+  setAutoFillBackground(true);
+  {
+    QPalette wp = palette();
+    wp.setColor(QPalette::Window, QColor("#fff5f8"));
+    setPalette(wp);
+  }
+  ui->centralwidget->setStyleSheet("background:transparent;");
 
   auto *root = qobject_cast<QVBoxLayout *>(ui->centralwidget->layout());
   if (!root)
@@ -5806,7 +5922,8 @@ void MainWindow::nbpp_build_shell() {
   nbppTitleBar->setFixedHeight(46);
   nbppTitleBar->setStyleSheet(
       "background: qlineargradient(x1:0, y1:0, x2:1, y2:0, "
-      "stop:0 #ef5ba1, stop:1 #f48fb1);");
+      "stop:0 #ef5ba1, stop:1 #f48fb1);"
+      "border-top-left-radius:16px;border-top-right-radius:16px;");
   auto *tl = new QHBoxLayout(nbppTitleBar);
   tl->setContentsMargins(12, 0, 8, 0);
   tl->setSpacing(10);
@@ -5908,30 +6025,32 @@ void MainWindow::nbpp_build_shell() {
   auto *bl = new QVBoxLayout(sidebar);
   bl->setContentsMargins(10, 12, 10, 10);
   bl->setSpacing(6);
-  auto mkNav = [&](const QString &t) {
+  auto mkNav = [&](const QString &t, int kind) {
     auto *b = new QPushButton(t, sidebar);
     b->setFlat(true);
+    b->setProperty("nbppKind", kind);
+    b->setIcon(nbppNavIcon(kind, QColor("#8a8f98")));
+    b->setIconSize(QSize(20, 20));
     b->setStyleSheet(
-        "text-align:left;padding:9px 12px;border-radius:9px;"
-        "font-size:14px;color:#333;");
+        "QPushButton{text-align:left;padding:9px 12px;border:none;"
+        "background:transparent;border-radius:10px;font-size:14px;"
+        "color:#374151;}");
     bl->addWidget(b);
     return b;
   };
-  nbppNavNodes = mkNav(tr("节点"));
-  auto *navSub = mkNav(tr("订阅"));
-  auto *navRules = mkNav(tr("规则"));
-  nbppNavLogs = mkNav(tr("日志"));
-  auto *navSettings = mkNav(tr("设置"));
+  nbppNavNodes = mkNav(tr("节点"), 0);
+  auto *navSub = mkNav(tr("订阅"), 1);
+  auto *navRules = mkNav(tr("规则"), 2);
+  nbppNavLogs = mkNav(tr("日志"), 3);
+  auto *navSettings = mkNav(tr("设置"), 4);
   auto *grpLbl = new QLabel(tr("订阅分组"), sidebar);
   grpLbl->setStyleSheet("color:#999;font-size:12px;padding:8px 4px 2px 4px;");
   bl->addWidget(grpLbl);
-  nbppGroupList = new QListWidget(sidebar);
-  nbppGroupList->setFrameShape(QFrame::NoFrame);
-  nbppGroupList->setStyleSheet(
-      "QListWidget{background:transparent;border:none;}"
-      "QListWidget::item{border-radius:8px;}"
-      "QListWidget::item:selected{background:#fbdce9;}");
-  bl->addWidget(nbppGroupList, 1);
+  nbppGroupBox = new QWidget(sidebar);
+  auto *gbl = new QVBoxLayout(nbppGroupBox);
+  gbl->setContentsMargins(0, 0, 0, 0);
+  gbl->setSpacing(4);
+  bl->addWidget(nbppGroupBox, 1);
   auto *card = new QFrame(sidebar);
   card->setStyleSheet(
       "background:#ffffff;border:1px solid #f6dbe6;border-radius:10px;");
@@ -5948,7 +6067,9 @@ void MainWindow::nbpp_build_shell() {
     rl->addStretch(1);
     auto *sw = new QPushButton(tr("关"), row);
     sw->setFlat(true);
-    sw->setStyleSheet("font-weight:bold;color:#999;");
+    sw->setStyleSheet(
+        "QPushButton{font-weight:bold;color:#999;border:none;"
+        "background:transparent;padding:2px 4px;}");
     rl->addWidget(sw);
     connect(sw, &QPushButton::clicked, this,
             [this, kind] { nbpp_rule_toggle(kind); });
@@ -5962,6 +6083,35 @@ void MainWindow::nbpp_build_shell() {
   body->addWidget(sidebar);
 
   nbppStack = new QStackedWidget(central);
+  nbppStack->setAutoFillBackground(true);
+  {
+    QPalette pal = nbppStack->palette();
+    pal.setColor(QPalette::Window, Qt::white);
+    nbppStack->setPalette(pal);
+  }
+  // Deterministic pill tabs + white pages, set on the widget itself so
+  // the app-wide theme sheet cannot leak through (it did: black tab bar).
+  ui->tabWidget->setStyleSheet(
+      "QTabWidget{background:#ffffff;}"
+      "QTabWidget::pane{background:#ffffff;border:none;}"
+      "QTabBar{background:#ffffff;}"
+      "QTabBar::tab{background:#fde7f0;color:#374151;border:none;"
+      "border-radius:10px;padding:7px 20px;margin:6px 8px 6px 0;"
+      "font-size:13px;}"
+      "QTabBar::tab:selected{background:#f06292;color:#ffffff;"
+      "font-weight:bold;}"
+      "QTabBar::tab:hover:!selected{background:#fbdce9;}");
+  ui->stats_widget->setStyleSheet(
+      "QTabWidget{background:#ffffff;}"
+      "QTabWidget::pane{background:#ffffff;border:none;}"
+      "QTabBar{background:#ffffff;}");
+  ui->stats_widget->setAutoFillBackground(true);
+  {
+    QPalette sp = ui->stats_widget->palette();
+    sp.setColor(QPalette::Window, Qt::white);
+    sp.setColor(QPalette::Base, Qt::white);
+    ui->stats_widget->setPalette(sp);
+  }
   nbppStack->addWidget(ui->tabWidget);
   if (auto *tb = ui->stats_widget->findChild<QTabBar *>())
     tb->hide();
@@ -5974,11 +6124,24 @@ void MainWindow::nbpp_build_shell() {
   // one-click test button move into the tab bar's corner.
   auto *corner = new QWidget(ui->tabWidget);
   auto *col = new QHBoxLayout(corner);
-  col->setContentsMargins(0, 2, 4, 2);
-  col->setSpacing(6);
+  col->setContentsMargins(0, 5, 10, 5);
+  col->setSpacing(8);
   ui->searchBox->setPlaceholderText(tr("搜索节点…"));
+  ui->searchBox->setVisible(true); // upstream hides it in the ctor; the shell needs it
+  ui->searchBox->setMinimumWidth(180);
+  ui->searchBox->setFixedHeight(34);
+  ui->searchBox->setStyleSheet(
+      "QLineEdit{background:#ffffff;border:1px solid #ead5de;"
+      "border-radius:10px;padding:6px 12px;color:#111111;"
+      "font-size:13px;}");
   col->addWidget(ui->searchBox);
   ui->url_test_button->setText(tr("一键测速"));
+  ui->url_test_button->setFixedHeight(34);
+  ui->url_test_button->setStyleSheet(
+      "QPushButton{background:#ffffff;border:1px solid #ead5de;"
+      "border-radius:10px;padding:6px 18px;color:#374151;"
+      "font-size:13px;}"
+      "QPushButton:hover{background:#fdf0f4;}");
   col->addWidget(ui->url_test_button);
   ui->tabWidget->setCornerWidget(corner, Qt::TopRightCorner);
   connect(ui->searchBox, &QLineEdit::textChanged, this,
@@ -5996,7 +6159,8 @@ void MainWindow::nbpp_build_shell() {
   auto *bottom = new QWidget(central);
   bottom->setFixedHeight(28);
   bottom->setStyleSheet(
-      "background:#fff5f8;border-top:1px solid #f6dbe6;");
+      "background:#ffffff;border-top:1px solid #f6dbe6;"
+      "border-bottom-left-radius:16px;border-bottom-right-radius:16px;");
   auto *bol = new QHBoxLayout(bottom);
   bol->setContentsMargins(12, 0, 12, 0);
   bol->setSpacing(16);
@@ -6022,10 +6186,14 @@ void MainWindow::nbpp_build_shell() {
   // ---- sidebar wiring (reuse the original menus and pages) ----
   connect(nbppNavNodes, &QPushButton::clicked, this, [this] {
     nbppStack->setCurrentIndex(0);
+    ui->tabWidget->setVisible(true);
+    ui->stats_widget->setVisible(false);
     nbpp_refresh_shell();
   });
   connect(nbppNavLogs, &QPushButton::clicked, this, [this] {
     nbppStack->setCurrentIndex(1);
+    ui->tabWidget->setVisible(false);
+    ui->stats_widget->setVisible(true);
     nbpp_refresh_shell();
   });
   connect(navSub, &QPushButton::clicked, this,
@@ -6034,12 +6202,6 @@ void MainWindow::nbpp_build_shell() {
           [this] { ui->menuRouting_Menu->exec(QCursor::pos()); });
   connect(navSettings, &QPushButton::clicked, this,
           [this] { ui->menu_preferences->exec(QCursor::pos()); });
-  connect(nbppGroupList, &QListWidget::currentRowChanged, this,
-          [this](int row) {
-            if (row >= 0 && row < ui->tabWidget->count())
-              ui->tabWidget->setCurrentIndex(row);
-          });
-
   nbppUiTimer = new QTimer(this);
   connect(nbppUiTimer, &QTimer::timeout, this,
           [this] { nbpp_refresh_shell(); });
@@ -6069,7 +6231,9 @@ void MainWindow::nbpp_refresh_shell() {
             nbppCountryNameCN(startedEnt->test_country.toUpper()) +
             " · ";
     QString lat = startedEnt->latencyInt > 0
-                      ? QString("   %1 ms").arg(startedEnt->latencyInt)
+                      ? QString("   <span style='color:#2e9e4f;"
+                                "font-weight:bold'>%1 ms</span>")
+                            .arg(startedEnt->latencyInt)
                       : "";
     nbppStatusNode->setText(loc + startedEnt->name + lat);
     if (startedEnt->traffic_data) {
@@ -6090,10 +6254,11 @@ void MainWindow::nbpp_refresh_shell() {
     nbppLastDown = -1;
   }
   auto segStyle = [](bool on) {
-    return on ? "background:#ffffff;color:#c2185b;font-weight:bold;"
-                "border:none;border-radius:8px;padding:5px 14px;"
-              : "background:transparent;color:#c2185b;border:none;"
-                "padding:5px 14px;";
+    return on ? "QPushButton{background:#ffffff;color:#c2185b;"
+                "font-weight:bold;border:none;border-radius:8px;"
+                "padding:5px 14px;}"
+              : "QPushButton{background:transparent;color:#6b7280;"
+                "border:none;padding:5px 14px;}";
   };
   nbppTunBtn->setChecked(ui->checkBox_VPN->isChecked());
   nbppTunBtn->setStyleSheet(segStyle(ui->checkBox_VPN->isChecked()));
@@ -6101,15 +6266,20 @@ void MainWindow::nbpp_refresh_shell() {
   nbppSysBtn->setStyleSheet(
       segStyle(ui->checkBox_SystemProxy->isChecked()));
   nbppMaxBtn->setText(isMaximized() ? "❐" : "▢");
-  auto navStyle = [](bool on) {
-    return on ? "text-align:left;padding:9px 12px;border-radius:9px;"
-                "font-size:14px;background:#fbdce9;color:#c2185b;"
-                "font-weight:bold;"
-              : "text-align:left;padding:9px 12px;border-radius:9px;"
-                "font-size:14px;color:#333;";
+  auto navApply = [this](QPushButton *b, bool on) {
+    b->setStyleSheet(on ? "QPushButton{text-align:left;padding:9px 12px;"
+                          "border:none;background:#fbdce9;"
+                          "border-radius:10px;font-size:14px;"
+                          "color:#c2185b;font-weight:bold;}"
+                        : "QPushButton{text-align:left;padding:9px 12px;"
+                          "border:none;background:transparent;"
+                          "border-radius:10px;font-size:14px;"
+                          "color:#374151;}");
+    b->setIcon(nbppNavIcon(b->property("nbppKind").toInt(),
+                           QColor(on ? "#d6336c" : "#8a8f98")));
   };
-  nbppNavNodes->setStyleSheet(navStyle(nbppStack->currentIndex() == 0));
-  nbppNavLogs->setStyleSheet(navStyle(nbppStack->currentIndex() == 1));
+  navApply(nbppNavNodes, nbppStack->currentIndex() == 0);
+  navApply(nbppNavLogs, nbppStack->currentIndex() == 1);
 
   // Sidebar group list, rebuilt only when the group set changes.
   QString sig;
@@ -6120,16 +6290,41 @@ void MainWindow::nbpp_refresh_shell() {
   sig += "|" + QString::number(Configs::dataStore->current_group);
   if (sig != nbppGroupSig) {
     nbppGroupSig = sig;
-    nbppGroupList->clear();
+    auto *gl = qobject_cast<QVBoxLayout *>(nbppGroupBox->layout());
+    while (auto *it = gl->takeAt(0)) {
+      if (it->widget())
+        it->widget()->deleteLater();
+      delete it;
+    }
+    int rowIdx = 0;
     for (int gid : Configs::profileManager->groupsTabOrder) {
       auto g = Configs::profileManager->groups[gid];
-      if (!g)
+      if (!g) {
+        rowIdx++;
         continue;
-      auto *row = new QWidget(nbppGroupList);
+      }
+      bool cur = gid == Configs::dataStore->current_group;
+      // A QFrame, not a QPushButton: the theme sheet's button gradient
+      // leaks into buttons carrying child layouts and mangles them.
+      auto *row = new QFrame(nbppGroupBox);
+      row->setFixedHeight(38);
+      row->setCursor(Qt::PointingHandCursor);
+      row->setProperty("nbppGroupRow", rowIdx);
+      row->installEventFilter(this);
+      row->setStyleSheet(cur ? "QFrame{background:#ffffff;"
+                               "border:1px solid #f6dbe6;"
+                               "border-radius:10px;}"
+                             : "QFrame{background:transparent;"
+                               "border:none;border-radius:10px;}"
+                               "QFrame:hover{background:#fdeef4;}");
       auto *rl = new QHBoxLayout(row);
-      rl->setContentsMargins(10, 5, 10, 5);
+      rl->setContentsMargins(12, 0, 12, 0);
+      rl->setSpacing(6);
       auto *nm = new QLabel(g->name, row);
-      nm->setStyleSheet("font-size:13px;color:#333;");
+      nm->setStyleSheet(cur ? "font-size:13px;color:#111111;"
+                              "font-weight:bold;"
+                            : "font-size:13px;color:#374151;");
+      nm->setAttribute(Qt::WA_TransparentForMouseEvents);
       rl->addWidget(nm);
       rl->addStretch(1);
       QString t;
@@ -6145,24 +6340,24 @@ void MainWindow::nbpp_refresh_shell() {
           t = dt.toString("MM-dd");
       }
       auto *tm = new QLabel(t, row);
-      tm->setStyleSheet("font-size:11px;color:#aaa;");
+      tm->setStyleSheet("font-size:11px;color:#9ca3af;");
+      tm->setAttribute(Qt::WA_TransparentForMouseEvents);
       rl->addWidget(tm);
-      auto *li = new QListWidgetItem(nbppGroupList);
-      li->setSizeHint(row->sizeHint());
-      nbppGroupList->addItem(li);
-      nbppGroupList->setItemWidget(li, row);
+      gl->addWidget(row);
+      rowIdx++;
     }
-    int cur = Configs::profileManager->groupsTabOrder.indexOf(
-        Configs::dataStore->current_group);
-    if (cur >= 0)
-      nbppGroupList->setCurrentRow(cur);
+    gl->addStretch(1);
   }
 
   // Rule switches reflect the active routing chain.
   auto swApply = [this](QPushButton *b, bool on) {
     b->setText(on ? tr("开") : tr("关"));
-    b->setStyleSheet(on ? "font-weight:bold;color:#2e9e4f;"
-                        : "font-weight:bold;color:#999;");
+    b->setStyleSheet(on ? "QPushButton{font-weight:bold;color:#2e9e4f;"
+                          "border:none;background:transparent;"
+                          "padding:2px 4px;}"
+                        : "QPushButton{font-weight:bold;color:#999;"
+                          "border:none;background:transparent;"
+                          "padding:2px 4px;}");
   };
   swApply(nbppSwPlay, nbpp_rule_present(0));
   swApply(nbppSwCnDom, nbpp_rule_present(1));
